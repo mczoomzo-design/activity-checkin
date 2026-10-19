@@ -16,9 +16,15 @@ const API = {
     } catch (e) {
       throw Object.assign(new Error('เชื่อมต่อเซิร์ฟเวอร์ไม่ได้ ตรวจสอบอินเทอร์เน็ตแล้วลองใหม่'), { code: 'NET' });
     }
+    const text = await res.text();
     let j;
-    try { j = await res.json(); } catch (e) { throw new Error('เซิร์ฟเวอร์ตอบกลับไม่ถูกต้อง (' + res.status + ')'); }
+    try { j = JSON.parse(text); } catch (e) { throw Object.assign(new Error('เซิร์ฟเวอร์ตอบกลับไม่ถูกต้อง (' + res.status + ')'), { raw: text.slice(0, 200) }); }
+    if (!j || typeof j !== 'object') throw Object.assign(new Error('เซิร์ฟเวอร์ตอบกลับไม่ถูกต้อง'), { raw: text.slice(0, 200) });
     if (!j.ok) throw Object.assign(new Error(j.error || 'เกิดข้อผิดพลาด'), { code: j.code });
+    // ถ้าได้คำตอบของ doGet แปลว่าคำขอ POST ถูกเปลี่ยนเป็น GET ระหว่างทาง ข้อมูลที่ส่งไปจึงหายหมด
+    if (j.data && j.data.app === 'activity-checkin') {
+      throw Object.assign(new Error('ข้อมูลส่งไปไม่ถึงเซิร์ฟเวอร์ (คำขอถูกเปลี่ยนจาก POST เป็น GET)'), { code: 'TRANSPORT', raw: text.slice(0, 200) });
+    }
     return j.data;
   },
 };

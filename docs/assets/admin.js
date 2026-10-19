@@ -36,7 +36,11 @@ function roomName(id) {
 }
 
 async function refreshBoot() {
-  A.boot = await API.call('admin.bootstrap');
+  const boot = await API.call('admin.bootstrap');
+  if (!boot || !Array.isArray(boot.classrooms)) {
+    throw Object.assign(new Error('ข้อมูลเริ่มต้นจากเซิร์ฟเวอร์ไม่ครบ'), { raw: JSON.stringify(boot).slice(0, 200) });
+  }
+  A.boot = boot;
   const s = document.getElementById('schoolName');
   if (s) s.textContent = A.boot.schoolName || '';
 }
@@ -60,10 +64,13 @@ function renderLogin() {
     b.disabled = true; b.textContent = 'กำลังตรวจสอบ…';
     try {
       const r = await API.call('admin.login', { password: pw.value }, '');
+      if (!r || typeof r.token !== 'string' || r.token.length < 16) {
+        throw Object.assign(new Error('เซิร์ฟเวอร์ไม่ได้ส่งรหัสเข้าใช้งานกลับมา'), { raw: JSON.stringify(r).slice(0, 200) });
+      }
       store.set('adminToken', r.token);
       start();
     } catch (e) {
-      err.textContent = e.message; err.classList.remove('hidden');
+      err.textContent = e.message + (e.raw ? ' · ' + e.raw : ''); err.classList.remove('hidden');
       b.disabled = false; b.textContent = 'เข้าสู่ระบบ';
     }
   };
@@ -76,13 +83,17 @@ function renderLogin() {
 /* ============================== Shell & routing ============================== */
 
 async function start() {
-  if (!store.get('adminToken')) return renderLogin();
+  const tok = store.get('adminToken');
+  if (!tok || tok === 'undefined' || tok === 'null') { store.del('adminToken'); return renderLogin(); }
   loading(root);
   try {
     await refreshBoot();
   } catch (e) {
-    if (e.code === 'AUTH') return renderLogin();
-    root.innerHTML = `<div class="login-wrap"><div class="card login center"><div style="color:var(--bad)">${icon('alert')}</div><h2>เชื่อมต่อระบบไม่สำเร็จ</h2><p class="sub">${esc(e.message)}</p><button class="btn primary" onclick="start()">ลองใหม่</button></div></div>`;
+    if (e.code === 'AUTH') { store.del('adminToken'); return renderLogin(); }
+    root.innerHTML = `<div class="login-wrap"><div class="card login center"><div style="color:var(--bad)">${icon('alert')}</div><h2>เชื่อมต่อระบบไม่สำเร็จ</h2><p class="sub">${esc(e.message)}</p>
+      ${e.raw ? `<p class="small muted" style="word-break:break-all">ข้อมูลที่ได้รับ: ${esc(e.raw)}</p>` : ''}
+      <div class="row" style="justify-content:center"><button class="btn" id="relog">เข้าสู่ระบบใหม่</button><button class="btn primary" onclick="start()">ลองใหม่</button></div></div></div>`;
+    document.getElementById('relog').onclick = () => { store.del('adminToken'); renderLogin(); };
     return;
   }
   renderShell();
