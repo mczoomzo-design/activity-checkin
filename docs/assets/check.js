@@ -22,10 +22,16 @@
       const p = { token, pin: pin || sessionStorage.getItem(pinKey) || '' };
       const data = await API.call('teacher.get', p);
       if (p.pin) sessionStorage.setItem(pinKey, p.pin);
+      // เก็บสิ่งที่เช็คไว้แต่ยังไม่ได้บันทึก (เช่น ถูกถาม PIN ใหม่ตอนกดบันทึก) ไม่ให้หายตอนโหลดใหม่
+      const unsaved = {};
+      Object.keys(S.dirty).forEach((sid) => { if (S.dirty[sid] && S.marks[sid]) unsaved[sid] = S.marks[sid]; });
       S.data = data;
       S.marks = {};
       Object.keys(data.attendance).forEach((sid) => { S.marks[sid] = JSON.parse(JSON.stringify(data.attendance[sid].data)); });
       S.dirty = {};
+      Object.keys(unsaved).forEach((sid) => {
+        if (data.sessions.some((s) => s.id === sid)) { S.marks[sid] = unsaved[sid]; S.dirty[sid] = true; }
+      });
       if (!S.sessionId || !data.sessions.some((s) => s.id === S.sessionId)) pickDefaultSession();
       document.title = 'เช็คชื่อ ' + data.classroom.name + ' · ' + data.activity.name;
       render();
@@ -208,12 +214,14 @@
       if (el) el.scrollIntoView({ behavior: 'smooth', block: 'center' });
       return;
     }
+    const snap = JSON.stringify(m);
     S.saving = true; render();
     try {
       const records = d.students.map((st) => ({ studentId: st.id, status: m[st.id].s, note: m[st.id].n || '' }));
       const res = await API.call('teacher.save', { token, pin: sessionStorage.getItem(pinKey) || '', sessionId: sid, records });
-      d.attendance[sid] = { data: JSON.parse(JSON.stringify(m)), updated_at: res.updated_at };
-      S.dirty[sid] = false;
+      d.attendance[sid] = { data: JSON.parse(snap), updated_at: res.updated_at };
+      // ถ้ากดเปลี่ยนสถานะระหว่างรอบันทึก ส่วนนั้นยังไม่ถึงเซิร์ฟเวอร์
+      S.dirty[sid] = JSON.stringify(marksOf(sid)) !== snap;
       toast('บันทึกการเช็คชื่อแล้ว', 'ok');
     } catch (e) {
       if (e.code === 'PIN') { S.saving = false; return renderPin(e.message, true); }

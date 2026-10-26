@@ -251,6 +251,10 @@ function str_(v, max) {
   return max ? s.slice(0, max) : s;
 }
 
+function strList_(v) {
+  return Array.isArray(v) ? v.map(function (x) { return str_(x, 100); }).filter(Boolean) : [];
+}
+
 function parseJson_(s, def) {
   try { return s ? JSON.parse(s) : def; } catch (e) { return def; }
 }
@@ -410,6 +414,7 @@ function classroomDelete_(p) {
   removeWhere_('Classrooms', function (c) { return c.id === id; });
   const removed = removeWhere_('Students', function (s) { return s.classroom_id === id; });
   removeWhere_('Links', function (l) { return l.classroom_id === id; });
+  removeWhere_('Attendance', function (a) { return a.classroom_id === id; });
   return { removedStudents: removed };
 }
 
@@ -477,7 +482,16 @@ function studentImportAll_(p) {
 
 function upsertStudents_(list, replaceClassroomIds) {
   let all = read_('Students');
+  // คนในห้องที่ถูกแทนที่: เก็บ id เดิมไว้ใช้ซ้ำ ข้อมูลเช็คชื่อที่ผูกกับ id จะได้ไม่หลุด
+  const reuse = {};
+  const reused = {};
+  const nameKey = function (s) { return 'n:' + s.classroom_id + '|' + s.first_name + '|' + s.last_name; };
   if (replaceClassroomIds.length) {
+    all.forEach(function (s) {
+      if (replaceClassroomIds.indexOf(s.classroom_id) < 0) return;
+      if (s.student_code) reuse['c:' + s.student_code] = s.id;
+      reuse[nameKey(s)] = s.id;
+    });
     all = all.filter(function (s) { return replaceClassroomIds.indexOf(s.classroom_id) < 0; });
   }
   const byCode = {};
@@ -503,7 +517,10 @@ function upsertStudents_(list, replaceClassroomIds) {
       Object.assign(ex, s);
       updated++;
     } else {
-      const row = Object.assign({ id: newId_('s') }, s);
+      const oldId = [s.student_code ? reuse['c:' + s.student_code] : '', reuse[nameKey(s)]]
+        .filter(function (x) { return x && !reused[x]; })[0];
+      if (oldId) reused[oldId] = 1;
+      const row = Object.assign({ id: oldId || newId_('s') }, s);
       all.push(row);
       if (row.student_code) byCode[row.student_code] = row;
       added++;
@@ -571,12 +588,14 @@ function activityList_() {
   return read_('Activities').map(function (row) {
     const a = activityOut_(row);
     const ss = sessions.filter(function (s) { return s.activity_id === a.id; });
-    const rooms = targetRooms_(a).length;
+    const roomIds = targetRooms_(a).map(function (c) { return c.id; });
     const todays = ss.filter(function (s) { return s.date === today; }).sort(function (x, y) { return Number(x.seq) - Number(y.seq); });
     a.session_count = ss.length;
-    a.room_count = rooms;
+    a.room_count = roomIds.length;
     a.today_sessions = todays.map(function (s) {
-      return { id: s.id, label: s.label, open_time: s.open_time, close_time: s.close_time, checked: (attBySession[s.id] || []).length };
+      // นับเฉพาะห้องเป้าหมายปัจจุบัน (ห้องที่ถูกเอาออกจากเป้าหมายแล้วไม่ต้องนับ)
+      const checked = (attBySession[s.id] || []).filter(function (x) { return roomIds.indexOf(x.classroom_id) >= 0; }).length;
+      return { id: s.id, label: s.label, open_time: s.open_time, close_time: s.close_time, checked: checked };
     });
     return a;
   }).sort(function (x, y) { return String(y.created_at).localeCompare(String(x.created_at)); });
@@ -604,14 +623,19 @@ function activitySave_(p) {
     return { label: str_(s.label, 40), open: str_(s.open), close: str_(s.close) };
   });
   if (!slots.length) throw userErr_('กรุณาเพิ่มรอบเช็คชื่ออย่างน้อย 1 รอบ');
+  const labels = {};
   slots.forEach(function (s) {
     if (!s.label) throw userErr_('กรุณาตั้งชื่อรอบเช็คชื่อให้ครบ');
     if (!validTime_(s.open) || !validTime_(s.close)) throw userErr_('เวลาของรอบ "' + s.label + '" ไม่ถูกต้อง');
     if (s.open >= s.close) throw userErr_('เวลาเปิดของรอบ "' + s.label + '" ต้องก่อนเวลาปิด');
+    // syncSessions_ จับคู่รอบเดิมด้วย วัน|ชื่อรอบ ชื่อซ้ำจะทำให้ได้ id ซ้ำกัน
+    if (labels[s.label]) throw userErr_('ชื่อรอบ "' + s.label + '" ซ้ำกัน');
+    labels[s.label] = 1;
   });
-  const statuses = (p.statuses || []).filter(function (k) { return STATUS_DEFS[k]; });
-  if (statuses.indexOf('P') < 0) statuses.unshift('P');
-  const targets = p.targets && (p.targets.grades || p.targets.rooms) ? p.targets : 'ALL';
+  const statuses = Object.keys(STATUS_DEFS).filter(function (k) { return k === 'P' || (p.statuses || []).indexOf(k) >= 0; });
+  const tGrades = strList_(p.targets && p.targets.grades);
+  const tRooms = strList_(p.targets && p.targets.rooms);
+  const targets = tGrades.length ? { grades: tGrades } : tRooms.length ? { rooms: tRooms } : 'ALL';
   const now = nowStr_();
   const data = {
     name: name,

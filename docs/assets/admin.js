@@ -395,21 +395,25 @@ async function pageActivityEdit(main, id, alive) {
 
 async function pageLinks(main, id, alive) {
   loading(main);
-  let D; let selDate; let selSid;
+  let D; let ss = []; let selDate; let selSid;
   async function fetchData(silent) {
     try {
       const d = await API.call('activity.links', { id });
       if (!alive()) return false;
       D = d;
+      // รีเฟรชแล้วรอบอาจเปลี่ยน (มีคนแก้กิจกรรม) ต้องใช้รายการรอบชุดใหม่ให้ตรงกับ progress
+      ss = D.activity.sessions;
+      if (!ss.some((s) => s.id === selSid)) pickSession();
       return true;
     } catch (e) { if (!silent) apiErr(e); return false; }
   }
+  function pickSession() {
+    const pick = ss.find((s) => s.date === D.today && D.now >= s.open_time && D.now <= s.close_time)
+      || ss.find((s) => s.date === D.today && D.now < s.open_time)
+      || ss.filter((s) => s.date <= D.today).pop() || ss[0];
+    selDate = pick && pick.date; selSid = pick && pick.id;
+  }
   if (!(await fetchData())) return;
-  const ss = D.activity.sessions;
-  const pick = ss.find((s) => s.date === D.today && D.now >= s.open_time && D.now <= s.close_time)
-    || ss.find((s) => s.date === D.today && D.now < s.open_time)
-    || ss.filter((s) => s.date <= D.today).pop() || ss[0];
-  if (pick) { selDate = pick.date; selSid = pick.id; }
 
   function draw() {
     const act = D.activity;
@@ -622,7 +626,7 @@ async function pageReport(main, id, alive) {
     XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(sum), 'สรุป');
     const head = ['ห้อง', 'เลขที่', 'เลขประจำตัว', 'ชื่อ – นามสกุล'].concat(ss.map(sessHead), act.statuses.map((k) => defs[k].label), ['เข้าร่วม (%)', 'ผล']);
     const all = [head];
-    const used = {};
+    const used = { 'สรุป': 1, 'ทุกห้อง': 1 };
     R.rooms.forEach((r) => {
       const rows = r.students.map((st) => [r.name, Number(st.number) || st.number, st.student_code, st.name]
         .concat(st.marks.map((m) => (m ? defs[m].label : '')), act.statuses.map((k) => st.count[k] || 0), [st.pct, st.pass ? 'ผ่าน' : 'ไม่ผ่าน']));

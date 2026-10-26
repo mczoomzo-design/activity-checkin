@@ -55,9 +55,11 @@ async function pageStudents(main, roomId, alive) {
 
   async function loadStudents() {
     if (!room) { students = []; return true; }
+    const want = room;
     try {
-      const list = await API.call('student.list', { classroomId: room.id });
-      if (!alive()) return false;
+      const list = await API.call('student.list', { classroomId: want.id });
+      // กดเปลี่ยนห้องเร็ว ๆ คำตอบอาจมาสลับลำดับ ทิ้งคำตอบของห้องที่ไม่ได้เลือกแล้ว
+      if (!alive() || room !== want) return false;
       students = list;
       return true;
     } catch (e) { apiErr(e); return false; }
@@ -225,7 +227,7 @@ function roomModal(room, done, count) {
   };
   const del = m.el.querySelector('#rDel');
   if (del) del.onclick = async () => {
-    if (!(await confirmBox('ลบห้อง ' + esc(room.name) + '?', `รายชื่อนักเรียน ${count || 0} คนในห้องนี้และลิงก์เช็คชื่อของห้องนี้จะถูกลบด้วย`, { okText: 'ลบห้อง', danger: true }))) return;
+    if (!(await confirmBox('ลบห้อง ' + room.name + '?', `รายชื่อนักเรียน ${count || 0} คนในห้องนี้และลิงก์เช็คชื่อของห้องนี้จะถูกลบด้วย`, { okText: 'ลบห้อง', danger: true }))) return;
     try { await API.call('classroom.delete', { id: room.id }); m.close(); toast('ลบห้องแล้ว', 'ok'); location.hash = '#/students'; done(null); } catch (e) { apiErr(e); }
   };
 }
@@ -573,9 +575,9 @@ function importModal(curRoom, rooms, done) {
         if (parsed && parsed.rows.length) { sheetName = name; break; }
       }
       if (!parsed || !parsed.rows.length) return toast('ไม่พบหัวตาราง "ชื่อ" ในไฟล์ ลองใช้แม่แบบ Excel ของระบบ', 'bad');
-      Object.assign(st, { file, rows: parsed.rows, hasRoom: parsed.hasRoom, sheetName, step: 2 });
-      st.target = parsed.hasRoom ? 'auto' : curRoom ? 'current' : 'auto';
       if (!parsed.hasRoom && !curRoom) return toast('ไฟล์ไม่มีคอลัมน์ "ห้อง" กรุณาเพิ่มคอลัมน์ห้อง หรือสร้างห้องก่อน', 'bad');
+      Object.assign(st, { file, rows: parsed.rows, hasRoom: parsed.hasRoom, sheetName, step: 2 });
+      st.target = parsed.hasRoom ? 'auto' : 'current';
       draw();
     } catch (e) {
       toast('อ่านไฟล์ไม่ได้: ' + e.message, 'bad');
