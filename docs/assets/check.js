@@ -1,8 +1,11 @@
-/* หน้าเช็คชื่อของครูที่ปรึกษา: check.html?t=<token> */
+/* หน้าเช็คชื่อของครูที่ปรึกษา: check.html?t=<ลิงก์ห้อง> หรือ check.html?h=<ลิงก์รวมทุกห้อง> */
 (function () {
   const app = document.getElementById('app');
-  const token = new URLSearchParams(location.search).get('t') || '';
+  const params = new URLSearchParams(location.search);
+  const token = params.get('t') || '';
+  const hub = params.get('h') || '';
   const pinKey = 'pin_' + token;
+  const hubUrl = hub ? 'check.html?h=' + encodeURIComponent(hub) : '';
 
   const S = {
     data: null,
@@ -13,9 +16,61 @@
     saving: false,
   };
 
+  if (!token && hub) return loadHub();
   if (!token) return fatal('ไม่พบรหัสลิงก์', 'กรุณาเปิดจากลิงก์ที่ได้รับจากแอดมินฝ่ายกิจกรรม');
 
   load();
+
+  /* ---------- ลิงก์รวม: ให้ครูเลือกห้องของตัวเอง ---------- */
+  async function loadHub() {
+    let H;
+    try {
+      H = await API.call('hub.get', { token: hub });
+    } catch (e) {
+      if (e.code === 'LINK') return fatal('ลิงก์ใช้งานไม่ได้', e.message);
+      return fatal('โหลดข้อมูลไม่สำเร็จ', e.message, true);
+    }
+    document.title = 'เลือกห้อง · ' + H.activity.name;
+    const lastKey = 'hubroom_' + hub;
+    let q = '';
+    const go = (r) => { store.set(lastKey, r.name); location.href = 'check.html?t=' + encodeURIComponent(r.token) + '&h=' + encodeURIComponent(hub); };
+    const s = H.session;
+    const stateText = !s ? '' : s.state === 'open' ? `เปิดเช็คถึง ${s.close_time} น.` : s.state === 'upcoming' ? `เปิด ${s.date === H.today ? s.open_time + ' น.' : thDate(s.date)}` : s.state === 'late' ? 'เลยเวลา · แก้ไขได้' : 'ปิดแล้ว';
+
+    function draw() {
+      const last = H.rooms.find((r) => r.name === store.get(lastKey));
+      const list = q ? H.rooms.filter((r) => (r.name + ' ' + (r.advisor || '')).toLowerCase().includes(q.toLowerCase())) : H.rooms;
+      const groups = [];
+      list.forEach((r) => { let g = groups.find((x) => x.grade === r.grade); if (!g) groups.push(g = { grade: r.grade, rooms: [] }); g.rooms.push(r); });
+      const done = H.rooms.filter((r) => r.checked_at).length;
+      const card = (r) => `<button class="hub-room ${r.checked_at ? 'done' : ''}" data-name="${esc(r.name)}">
+          <b>${esc(r.name)}</b>
+          <small>${esc(r.advisor) || '&nbsp;'}</small>
+          ${s ? (r.checked_at ? `<span class="pill ok">${icon('check', 'sm')} เช็คแล้ว</span>` : '<span class="pill warn">รอเช็ค</span>') : ''}
+        </button>`;
+      app.innerHTML = `
+        <div class="t-head">
+          <div class="act">${esc(H.schoolName || '')}</div>
+          <div class="room">${esc(H.activity.name)}</div>
+          <div class="adv">${dateRangeText(H.activity.dates)}</div>
+          ${s ? `<div class="row" style="margin-top:8px;gap:8px"><span class="state-pill ${s.state}">${icon('clock', 'sm')} รอบ${esc(s.label)} · ${stateText}</span><span class="small" style="color:var(--side-muted)">เช็คแล้ว ${done}/${H.rooms.length} ห้อง</span></div>` : ''}
+        </div>
+        <div class="t-body">
+          ${H.activity.status === 'closed' ? `<div class="notice bad">${icon('lock', 'sm')}<span>กิจกรรมนี้ปิดการเช็คชื่อแล้ว</span></div>` : ''}
+          <h2>เลือกห้องที่คุณเป็นครูที่ปรึกษา</h2>
+          ${last && !q ? `<div class="col" style="gap:6px"><span class="label">ห้องที่คุณเลือกล่าสุด</span><div class="hub-grid">${card(last)}</div></div>` : ''}
+          ${H.rooms.length > 8 ? `<input class="input" id="hubSearch" placeholder="ค้นหาห้อง หรือชื่อครู" value="${esc(q)}">` : ''}
+          ${!H.rooms.length ? '<div class="card empty">กิจกรรมนี้ยังไม่มีห้องเรียน กรุณาแจ้งแอดมิน</div>' : ''}
+          ${q && !list.length ? '<div class="empty">ไม่พบห้องที่ค้นหา</div>' : ''}
+          ${groups.map((g) => `<div class="col" style="gap:6px"><span class="label">${esc(g.grade)}</span><div class="hub-grid">${g.rooms.map(card).join('')}</div></div>`).join('')}
+          ${H.activity.require_pin ? `<p class="help center">${icon('lock', 'sm')} แต่ละห้องต้องใส่ PIN ของห้องตัวเองก่อนเช็คชื่อ</p>` : ''}
+        </div>`;
+      app.querySelectorAll('.hub-room').forEach((b) => b.addEventListener('click', () => go(H.rooms.find((r) => r.name === b.dataset.name))));
+      const sb = document.getElementById('hubSearch');
+      if (sb) sb.addEventListener('input', debounce(() => { q = sb.value; draw(); const n = document.getElementById('hubSearch'); n.focus(); n.setSelectionRange(n.value.length, n.value.length); }, 200));
+    }
+    draw();
+  }
 
   async function load(pin) {
     try {
@@ -36,6 +91,7 @@
       document.title = 'เช็คชื่อ ' + data.classroom.name + ' · ' + data.activity.name;
       render();
     } catch (e) {
+      if (e.code === 'HUB') return location.replace('check.html?h=' + encodeURIComponent(token));
       if (e.code === 'PIN') return renderPin(e.message, !!pin);
       if (e.code === 'LINK') return fatal('ลิงก์ใช้งานไม่ได้', e.message);
       fatal('โหลดข้อมูลไม่สำเร็จ', e.message, true);
@@ -64,7 +120,7 @@
 
   function renderPin(msg, wasWrong) {
     sessionStorage.removeItem(pinKey);
-    app.innerHTML = `<div class="t-body"><div class="card pin-box stack">
+    app.innerHTML = `<div class="t-body">${hubUrl ? `<a class="link-btn" href="${hubUrl}">${icon('back', 'sm')} เลือกห้องอื่น</a>` : ''}<div class="card pin-box stack">
       <div class="center" style="color:var(--pri)">${icon('lock')}</div>
       <div class="center"><h2>ใส่ PIN 4 หลัก</h2><p class="sub small" style="margin-top:4px">PIN ได้รับมาพร้อมลิงก์จากแอดมิน</p></div>
       <input class="input pin-input" id="pin" inputmode="numeric" maxlength="4" autocomplete="one-time-code" placeholder="••••">
@@ -108,6 +164,7 @@
 
     app.innerHTML = `
       <div class="t-head">
+        ${hubUrl ? `<a class="hub-back" href="${hubUrl}">${icon('back', 'sm')} เลือกห้องอื่น</a>` : ''}
         <div class="act">${esc(d.activity.name)}${d.schoolName ? ' · ' + esc(d.schoolName) : ''}</div>
         <div class="row" style="margin-top:2px">
           <div class="room grow">${esc(d.classroom.name)}</div>

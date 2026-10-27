@@ -25,9 +25,17 @@ function loading(el, text = 'กำลังโหลด…') {
   el.innerHTML = `<div class="loading-block"><div class="spinner"></div>${esc(text)}</div>`;
 }
 
+function checkBase() {
+  return location.href.split('#')[0].split('?')[0].replace(/index\.html$/, '') + 'check.html';
+}
+
 function checkUrl(token) {
-  const base = location.href.split('#')[0].split('?')[0].replace(/index\.html$/, '');
-  return base + 'check.html?t=' + encodeURIComponent(token);
+  return checkBase() + '?t=' + encodeURIComponent(token);
+}
+
+/** ลิงก์รวม: ครูทุกห้องใช้ลิงก์เดียวกันแล้วเลือกห้องของตัวเอง */
+function hubUrl(token) {
+  return checkBase() + '?h=' + encodeURIComponent(token);
 }
 
 function roomName(id) {
@@ -429,11 +437,23 @@ async function pageLinks(main, id, alive) {
         <a class="btn" href="#/activity/${act.id}/report">${icon('chart', 'sm')} รายงาน</a>
       </div>
       ${act.status === 'closed' ? `<div class="notice warn">${icon('lock', 'sm')}<span>กิจกรรมนี้ปิดแล้ว ครูเปิดลิงก์ดูได้แต่เช็คชื่อไม่ได้</span></div>` : ''}
+      ${D.rooms.length ? `<div class="card stack">
+        <div class="row wrap">
+          <div class="grow"><h2>ลิงก์เดียวสำหรับทุกห้อง</h2><p class="sub small">ส่งครั้งเดียวในกลุ่ม LINE ครู ครูกดเข้าแล้วเลือกห้องของตัวเอง ใช้ได้ทุกวันและทุกรอบของกิจกรรมนี้</p></div>
+          <button class="btn" id="hubQr">${icon('qr', 'sm')} QR Code</button>
+          <button class="btn primary" id="hubCopy">${icon('copy', 'sm')} คัดลอกข้อความสำหรับส่ง</button>
+        </div>
+        <div class="copy-field"><input class="input" readonly value="${esc(hubUrl(D.hub))}"><a class="btn" href="${hubUrl(D.hub)}" target="_blank" rel="noopener">${icon('external', 'sm')} เปิดดู</a></div>
+        ${act.require_pin
+          ? `<div class="notice">${icon('lock', 'sm')}<span>เปิด PIN อยู่: ครูแต่ละห้องต้องใส่ PIN ของห้องตัวเอง (ดู PIN ในตารางด้านล่าง แล้วส่งให้ครูแต่ละคน)</span></div>`
+          : `<div class="notice warn">${icon('info', 'sm')}<span>ใครมีลิงก์นี้เช็คชื่อได้ทุกห้อง ถ้าต้องการกันการเช็คผิดห้อง ให้เปิด "ต้องใส่ PIN" ใน<a href="#/activity/${act.id}/edit">หน้าแก้ไขกิจกรรม</a></span></div>`}
+        <div><button class="link-btn small" id="hubReset" style="color:var(--sub)">${icon('refresh', 'sm')} สร้างลิงก์รวมใหม่ (ลิงก์เดิมจะใช้ไม่ได้)</button></div>
+      </div>` : ''}
       <div class="card stack">
         <div class="row wrap">
-          <div class="grow"><h2>ส่งลิงก์ให้ครูที่ปรึกษา</h2><p class="sub small">ลิงก์เดียวต่อห้อง ใช้ได้ทุกวันและทุกรอบของกิจกรรมนี้${act.require_pin ? ' · ต้องใส่ PIN' : ''}</p></div>
+          <div class="grow"><h2>ลิงก์แยกรายห้อง</h2><p class="sub small">ใช้เมื่อต้องการส่งให้ครูทีละห้อง${act.require_pin ? ' · ต้องใส่ PIN' : ''}</p></div>
           <button class="btn" id="exportLinks">${icon('xls', 'sm')} ส่งออก Excel</button>
-          <button class="btn primary" id="copyAll">${icon('copy', 'sm')} คัดลอกลิงก์ทุกห้อง</button>
+          <button class="btn" id="copyAll">${icon('copy', 'sm')} คัดลอกลิงก์ทุกห้อง</button>
         </div>
         ${!D.rooms.length ? `<div class="empty">ยังไม่มีห้องเป้าหมาย <a href="#/students">เพิ่มห้องเรียน</a> หรือ <a href="#/activity/${act.id}/edit">แก้ไขห้องที่ต้องเช็คชื่อ</a></div>` : ''}
       </div>
@@ -479,6 +499,19 @@ async function pageLinks(main, id, alive) {
     };
     if (q('#slots')) q('#slots').onclick = (e) => { const b = e.target.closest('[data-sid]'); if (b) { selSid = b.dataset.sid; draw(); } };
     if (q('#reload')) q('#reload').onclick = async () => { if (await fetchData()) { draw(); toast('อัปเดตแล้ว'); } };
+    const hubText = () => `ลิงก์เช็คชื่อ: ${D.activity.name}\n${dateRangeText(D.activity.dates)}\nครูที่ปรึกษากดลิงก์ แล้วเลือกห้องของตัวเองได้เลย\n${hubUrl(D.hub)}`;
+    if (q('#hubCopy')) {
+      q('#hubCopy').onclick = () => copyText(hubText());
+      q('#hubQr').onclick = () => showQr({ title: 'QR Code ลิงก์รวมทุกห้อง', sub: D.activity.name, url: hubUrl(D.hub), copy: hubText(), file: 'QR_ทุกห้อง' });
+      q('#hubReset').onclick = async () => {
+        if (!(await confirmBox('สร้างลิงก์รวมใหม่?', 'ลิงก์รวมเดิมจะใช้ไม่ได้ทันที ต้องส่งลิงก์ใหม่ให้ครูอีกครั้ง (ลิงก์แยกรายห้องและข้อมูลการเช็คชื่อไม่เปลี่ยน)', { okText: 'สร้างลิงก์ใหม่', danger: true }))) return;
+        try {
+          const res = await API.call('link.reset', { activityId: D.activity.id, classroomId: 'ALL' });
+          D.hub = res.token;
+          draw(); toast('สร้างลิงก์รวมใหม่แล้ว', 'ok');
+        } catch (e) { apiErr(e); }
+      };
+    }
     q('#copyAll').onclick = () => {
       if (!D.rooms.length) return;
       const text = `ลิงก์เช็คชื่อ: ${D.activity.name}\n${dateRangeText(D.activity.dates)}\n\n` + D.rooms.map(linkText).join('\n\n');
@@ -498,7 +531,7 @@ async function pageLinks(main, id, alive) {
       const r = D.rooms.find((x) => x.id === b.closest('tr').dataset.room);
       const act = b.dataset.act;
       if (act === 'copy') copyText(linkText(r));
-      if (act === 'qr') showQr(r);
+      if (act === 'qr') showQr({ title: 'QR Code ห้อง ' + r.name, sub: D.activity.name + (r.advisor ? ' · ' + r.advisor : ''), url: checkUrl(r.token), pin: D.activity.require_pin ? r.pin : '', copy: linkText(r), file: 'QR_' + r.name.replace(/\//g, '-') });
       if (act === 'reset') {
         if (!(await confirmBox('สร้างลิงก์ใหม่?', `ลิงก์เดิมของห้อง <b>${esc(r.name)}</b> จะใช้ไม่ได้ทันที ต้องส่งลิงก์ใหม่ให้ครูอีกครั้ง (ข้อมูลการเช็คชื่อไม่หาย)`, { okText: 'สร้างลิงก์ใหม่', danger: true }))) return;
         try {
@@ -510,23 +543,22 @@ async function pageLinks(main, id, alive) {
     }));
   }
 
-  function showQr(r) {
-    const url = checkUrl(r.token);
+  function showQr({ title, sub, url, pin, copy, file }) {
     const m = openModal(`
-      <div class="modal-head"><div class="badge-ic">${icon('qr')}</div><div class="grow"><h2>QR Code ห้อง ${esc(r.name)}</h2><p class="sub small">${esc(D.activity.name)}${r.advisor ? ' · ' + esc(r.advisor) : ''}</p></div><button class="icon-btn" data-close>${icon('x')}</button></div>
+      <div class="modal-head"><div class="badge-ic">${icon('qr')}</div><div class="grow"><h2>${esc(title)}</h2><p class="sub small">${esc(sub)}</p></div><button class="icon-btn" data-close>${icon('x')}</button></div>
       <div class="qr-box" id="qr"></div>
-      ${D.activity.require_pin ? `<p class="center">PIN: <b style="font-size:20px;letter-spacing:4px">${esc(r.pin)}</b></p>` : ''}
+      ${pin ? `<p class="center">PIN: <b style="font-size:20px;letter-spacing:4px">${esc(pin)}</b></p>` : ''}
       <div class="copy-field"><input class="input" readonly value="${esc(url)}"><button class="btn" id="cp">${icon('copy', 'sm')} คัดลอก</button></div>
       <div class="modal-foot"><button class="btn" id="dl">${icon('download', 'sm')} บันทึกรูป QR</button><button class="btn primary" data-close>ปิด</button></div>`);
     const box = m.el.querySelector('#qr');
     if (window.QRCode) new QRCode(box, { text: url, width: 440, height: 440, correctLevel: QRCode.CorrectLevel.M });
     else box.innerHTML = '<p class="sub">โหลดตัวสร้าง QR ไม่สำเร็จ</p>';
-    m.el.querySelector('#cp').onclick = () => copyText(linkText(r));
+    m.el.querySelector('#cp').onclick = () => copyText(copy);
     m.el.querySelector('#dl').onclick = () => {
       const img = box.querySelector('img'); const cv = box.querySelector('canvas');
       const src = cv ? cv.toDataURL('image/png') : img && img.src;
       if (!src) return;
-      const a = document.createElement('a'); a.href = src; a.download = `QR_${r.name.replace(/\//g, '-')}.png`; a.click();
+      const a = document.createElement('a'); a.href = src; a.download = file + '.png'; a.click();
     };
   }
 

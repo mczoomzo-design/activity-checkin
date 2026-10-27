@@ -52,6 +52,7 @@ const PUBLIC_ACTIONS = {
   'admin.login': adminLogin_,
   'teacher.get': teacherGet_,
   'teacher.save': teacherSave_,
+  'hub.get': hubGet_,
 };
 
 const ADMIN_ACTIONS = {
@@ -77,7 +78,7 @@ const ADMIN_ACTIONS = {
 
 const WRITE_ACTIONS = ['teacher.save', 'admin.changePassword', 'settings.save', 'classroom.save', 'classroom.delete',
   'student.saveMany', 'student.importAll', 'student.update', 'student.delete', 'activity.save', 'activity.delete',
-  'activity.links', 'link.reset'];
+  'activity.links', 'link.reset', 'hub.get'];
 
 function route_(action, p, auth) {
   let fn = PUBLIC_ACTIONS[action];
@@ -700,25 +701,34 @@ function activityDelete_(p) {
 
 /* ============================== Links & progress ============================== */
 
+/** classroom_id ของ "ลิงก์รวม" ที่ครูทุกห้องใช้ร่วมกัน แล้วเลือกห้องของตัวเอง */
+const HUB = 'ALL';
+
 function randomPin_() {
   return String(Math.floor(1000 + Math.random() * 9000));
+}
+
+/** สร้างลิงก์ของห้องเป้าหมายและลิงก์รวมที่ยังไม่มี แล้วคืน map classroom_id → link */
+function ensureLinks_(act, rooms) {
+  const links = read_('Links').filter(function (l) { return l.activity_id === act.id; });
+  const byRoom = byKey_(links, 'classroom_id');
+  const created = [];
+  rooms.map(function (c) { return c.id; }).concat([HUB]).forEach(function (id) {
+    if (!byRoom[id]) {
+      const l = { token: randomToken_(20), activity_id: act.id, classroom_id: id, pin: id === HUB ? '' : randomPin_(), created_at: nowStr_() };
+      created.push(l);
+      byRoom[id] = l;
+    }
+  });
+  insert_('Links', created);
+  return byRoom;
 }
 
 /** คืนลิงก์ของทุกห้องเป้าหมาย (สร้างให้ถ้ายังไม่มี) พร้อมความคืบหน้าการเช็คชื่อทุกรอบ */
 function activityLinks_(p) {
   const act = activityGet_({ id: p.id });
   const rooms = targetRooms_(act);
-  const links = read_('Links').filter(function (l) { return l.activity_id === act.id; });
-  const byRoom = byKey_(links, 'classroom_id');
-  const created = [];
-  rooms.forEach(function (c) {
-    if (!byRoom[c.id]) {
-      const l = { token: randomToken_(20), activity_id: act.id, classroom_id: c.id, pin: randomPin_(), created_at: nowStr_() };
-      created.push(l);
-      byRoom[c.id] = l;
-    }
-  });
-  insert_('Links', created);
+  const byRoom = ensureLinks_(act, rooms);
 
   const counts = {};
   read_('Students').forEach(function (s) { counts[s.classroom_id] = (counts[s.classroom_id] || 0) + 1; });
@@ -735,6 +745,7 @@ function activityLinks_(p) {
     activity: act,
     today: today_(),
     now: hm_(),
+    hub: byRoom[HUB].token,
     rooms: rooms.map(function (c) {
       return {
         id: c.id, name: c.name, advisor: c.advisor, advisor_contact: c.advisor_contact,
@@ -749,7 +760,7 @@ function linkReset_(p) {
   const row = read_('Links').filter(function (l) { return l.activity_id === p.activityId && l.classroom_id === p.classroomId; })[0];
   if (!row) throw userErr_('ไม่พบลิงก์นี้');
   row.token = randomToken_(20);
-  row.pin = randomPin_();
+  row.pin = row.classroom_id === HUB ? '' : randomPin_();
   row.created_at = nowStr_();
   update_('Links', row);
   return { token: row.token, pin: row.pin };
@@ -765,6 +776,7 @@ function linkContext_(p, ctx) {
   const actRow = read_('Activities').filter(function (a) { return a.id === link.activity_id; })[0];
   if (!actRow) throw userErr_('กิจกรรมนี้ถูกลบไปแล้ว', 'LINK');
   const act = activityOut_(actRow);
+  if (link.classroom_id === HUB) throw userErr_('นี่คือลิงก์รวม กรุณาเลือกห้อง', 'HUB');
   const room = read_('Classrooms').filter(function (c) { return c.id === link.classroom_id; })[0];
   if (!room) throw userErr_('ไม่พบห้องเรียนของลิงก์นี้', 'LINK');
   if (act.require_pin && !ctx.isAdmin) {
@@ -786,6 +798,41 @@ function sessionState_(s, act, today, now) {
   if (now < s.open_time) return 'upcoming';
   if (now <= s.close_time) return 'open';
   return act.allow_late_edit ? 'late' : 'closed';
+}
+
+/** รอบที่ควรแสดงตอนนี้: รอบที่เปิดอยู่ > รอบถัดไปของวันนี้ > รอบล่าสุดที่ผ่านมา > รอบแรก */
+function currentSession_(sessions, today, now) {
+  return sessions.filter(function (s) { return s.date === today && now >= s.open_time && now <= s.close_time; })[0]
+    || sessions.filter(function (s) { return s.date === today && now < s.open_time; })[0]
+    || sessions.filter(function (s) { return s.date <= today; }).pop()
+    || sessions[0] || null;
+}
+
+/** หน้าลิงก์รวม: รายชื่อห้องทั้งหมดของกิจกรรม ให้ครูเลือกห้องของตัวเอง */
+function hubGet_(p) {
+  const token = str_(p.token);
+  const link = token.length >= 10 ? read_('Links').filter(function (l) { return l.token === token && l.classroom_id === HUB; })[0] : null;
+  if (!link) throw userErr_('ลิงก์นี้ไม่ถูกต้องหรือถูกยกเลิกแล้ว กรุณาขอลิงก์ใหม่จากแอดมิน', 'LINK');
+  const actRow = read_('Activities').filter(function (a) { return a.id === link.activity_id; })[0];
+  if (!actRow) throw userErr_('กิจกรรมนี้ถูกลบไปแล้ว', 'LINK');
+  const act = activityOut_(actRow);
+  const rooms = targetRooms_(act);
+  const byRoom = ensureLinks_(act, rooms);
+  const today = today_(), now = hm_();
+  const sess = currentSession_(sessionsOf_(act.id), today, now);
+  const checked = {};
+  if (sess) read_('Attendance').forEach(function (a) { if (a.session_id === sess.id) checked[a.classroom_id] = a.updated_at; });
+  const counts = {};
+  read_('Students').forEach(function (s) { counts[s.classroom_id] = (counts[s.classroom_id] || 0) + 1; });
+  return {
+    schoolName: schoolName_(),
+    activity: { name: act.name, description: act.description, dates: act.dates, require_pin: act.require_pin, status: act.status },
+    session: sess ? { date: sess.date, label: sess.label, open_time: sess.open_time, close_time: sess.close_time, state: sessionState_(sess, act, today, now) } : null,
+    today: today,
+    rooms: rooms.map(function (c) {
+      return { name: c.name, grade: c.grade, advisor: c.advisor, student_count: counts[c.id] || 0, token: byRoom[c.id].token, checked_at: checked[c.id] || '' };
+    }),
+  };
 }
 
 function teacherGet_(p, ctx) {
