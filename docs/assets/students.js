@@ -101,8 +101,13 @@ async function pageStudents(main, roomId, alive) {
             <button class="room-item ${room && c.id === room.id ? 'on' : ''}" data-room="${c.id}"><span class="grow">${esc(c.name)}</span>${c.student_count ? `<span class="small ${room && c.id === room.id ? '' : 'sub'}">${c.student_count} คน</span>` : '<span class="pill warn">ยังไม่มีรายชื่อ</span>'}</button>`).join('')}`).join('')}
         </div>
         <div class="stack" style="min-width:0">
+          <div class="dropzone inline" id="dropzone" role="button" tabindex="0">
+            <span class="icon-box xl" style="width:56px;height:56px;border-radius:16px">${icon('xls', 'lg')}</span>
+            <div class="grow"><h3 class="head-font" style="font-size:18px;color:var(--text)">ลากไฟล์ Excel มาวางที่นี่</h3><p class="small sub">ระบบแยกห้อง ตรวจชื่อซ้ำ และสร้างห้องใหม่ให้อัตโนมัติ · หรือกด <b>เพิ่มนักเรียน</b> เพื่อพิมพ์/วางรายชื่อจาก LINE</p></div>
+            <span class="btn">${icon('upload', 'sm')} เลือกไฟล์</span>
+          </div>
           <div class="card tight row wrap" style="gap:28px;padding:14px 24px">
-            <div><div class="sub small">ห้อง</div><div style="font-size:22px;font-weight:600">${esc(room.name)}</div></div>
+            <div><div class="sub small">ห้อง</div><div class="head-font" style="font-size:24px;font-weight:600">${esc(room.name)}</div></div>
             <div><div class="sub small">ครูที่ปรึกษา</div><div style="font-weight:500">${esc(room.advisor) || '<span class="muted">ยังไม่ระบุ</span>'}</div>${room.advisor_contact ? `<div class="small sub">${esc(room.advisor_contact)}</div>` : ''}</div>
             <div><div class="sub small">นักเรียน</div><div style="font-weight:500">${students.length} คน${students.length ? ` <span class="sub small">(ชาย ${male} · หญิง ${female})</span>` : ''}</div></div>
             <button class="link-btn right" id="editRoom">${icon('edit', 'sm')} แก้ไขห้อง</button>
@@ -146,6 +151,14 @@ async function pageStudents(main, roomId, alive) {
     const imp = () => importModal(room, rooms, (selectId) => reloadAll(selectId));
     q('#import').onclick = imp;
     if (q('#import2')) q('#import2').onclick = imp;
+    const dz = q('#dropzone');
+    if (dz) {
+      dz.onclick = imp;
+      dz.onkeydown = (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); imp(); } };
+      ['dragenter', 'dragover'].forEach((ev) => dz.addEventListener(ev, (e) => { e.preventDefault(); dz.classList.add('drag'); }));
+      ['dragleave', 'drop'].forEach((ev) => dz.addEventListener(ev, (e) => { e.preventDefault(); dz.classList.remove('drag'); }));
+      dz.addEventListener('drop', (e) => { const f = e.dataTransfer.files[0]; if (f) importModal(room, rooms, (selectId) => reloadAll(selectId), f); });
+    }
     const addRoom = () => roomModal(null, (id) => reloadAll(id));
     if (q('#addRoom')) q('#addRoom').onclick = addRoom;
     if (q('#addRoom2')) q('#addRoom2').onclick = addRoom;
@@ -483,7 +496,7 @@ function parseSheetRows(aoa) {
   return { rows: out, hasRoom: map.room !== undefined || map.grade !== undefined };
 }
 
-function importModal(curRoom, rooms, done) {
+function importModal(curRoom, rooms, done, initialFile) {
   const st = { step: 1, file: null, rows: [], hasRoom: false, target: 'auto', mode: 'append', sheetName: '' };
   const m = openModal('<div id="im"></div>', { wide: true });
   const box = m.el.querySelector('#im');
@@ -623,4 +636,5 @@ function importModal(curRoom, rooms, done) {
   }
 
   draw();
+  if (initialFile) readFile(initialFile);
 }

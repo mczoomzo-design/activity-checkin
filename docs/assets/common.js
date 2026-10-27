@@ -70,6 +70,10 @@ const ICONS = {
   alert: '<path d="M12 9v4M10.363 3.591l-8.106 13.534a1.914 1.914 0 0 0 1.636 2.871h16.214a1.914 1.914 0 0 0 1.636 -2.87l-8.106 -13.536a1.914 1.914 0 0 0 -3.274 0zM12 16h.01"/>',
   chevron: '<path d="M6 9l6 6l6 -6"/>',
   back: '<path d="M15 6l-6 6l6 6"/>',
+  arrowRight: '<path d="M9 6l6 6l-6 6"/>',
+  sun: '<circle cx="12" cy="12" r="4"/><path d="M3 12h1M20 12h1M12 3v1M12 20v1M5.6 5.6l.7 .7M17.7 17.7l.7 .7M5.6 18.4l.7 -.7M17.7 6.3l.7 -.7"/>',
+  bell: '<path d="M10 5a2 2 0 1 1 4 0a7 7 0 0 1 4 6v3a4 4 0 0 0 2 3h-16a4 4 0 0 0 2 -3v-3a7 7 0 0 1 4 -6M9 17v1a3 3 0 0 0 6 0v-1"/>',
+  grid: '<rect x="4" y="4" width="6" height="6" rx="1"/><rect x="14" y="4" width="6" height="6" rx="1"/><rect x="4" y="14" width="6" height="6" rx="1"/><rect x="14" y="14" width="6" height="6" rx="1"/>',
   door: '<path d="M14 12v.01M3 21h18M6 21v-16a2 2 0 0 1 2 -2h8a2 2 0 0 1 2 2v16"/>',
 };
 
@@ -86,9 +90,25 @@ function toast(msg, type = '') {
   if (!box) { box = document.createElement('div'); box.id = 'toasts'; document.body.appendChild(box); }
   const el = document.createElement('div');
   el.className = 'toast ' + type;
-  el.innerHTML = (type === 'ok' ? icon('check', 'sm') : type === 'bad' ? icon('alert', 'sm') : '') + `<span>${esc(msg)}</span>`;
+  el.innerHTML = (type === 'ok' ? `<span class="ti">${icon('check', 'sm')}</span>` : type === 'bad' ? `<span class="ti">${icon('alert', 'sm')}</span>` : '') + `<span>${esc(msg)}</span>`;
   box.appendChild(el);
-  setTimeout(() => el.remove(), type === 'bad' ? 5000 : 3000);
+  while (box.children.length > 3) box.firstChild.remove();
+  setTimeout(() => { el.classList.add('out'); setTimeout(() => el.remove(), 260); }, type === 'bad' ? 5000 : 2600);
+}
+
+/** นับตัวเลขขึ้น/ลงแบบนุ่ม ๆ (ข้ามแอนิเมชันถ้าผู้ใช้ตั้งค่าลดการเคลื่อนไหว) */
+function countUp(el, to, ms = 600) {
+  if (!el) return;
+  const from = Number(el.textContent.replace(/,/g, '')) || 0;
+  if (from === to || matchMedia('(prefers-reduced-motion: reduce)').matches) { el.textContent = to.toLocaleString(); return; }
+  const t0 = performance.now();
+  const step = (now) => {
+    const p = Math.min(1, (now - t0) / ms);
+    const e = 1 - Math.pow(1 - p, 3);
+    el.textContent = Math.round(from + (to - from) * e).toLocaleString();
+    if (p < 1) requestAnimationFrame(step);
+  };
+  requestAnimationFrame(step);
 }
 
 /** เปิด modal: คืน {el, close} — onClose เรียกเมื่อปิด */
@@ -126,6 +146,21 @@ function confirmBox(title, message, { okText = 'ยืนยัน', danger = fa
 
 const TH_MONTHS = ['ม.ค.', 'ก.พ.', 'มี.ค.', 'เม.ย.', 'พ.ค.', 'มิ.ย.', 'ก.ค.', 'ส.ค.', 'ก.ย.', 'ต.ค.', 'พ.ย.', 'ธ.ค.'];
 const TH_DAYS = ['อา.', 'จ.', 'อ.', 'พ.', 'พฤ.', 'ศ.', 'ส.'];
+
+const TH_MONTHS_LONG = ['มกราคม', 'กุมภาพันธ์', 'มีนาคม', 'เมษายน', 'พฤษภาคม', 'มิถุนายน', 'กรกฎาคม', 'สิงหาคม', 'กันยายน', 'ตุลาคม', 'พฤศจิกายน', 'ธันวาคม'];
+const TH_DAYS_LONG = ['อาทิตย์', 'จันทร์', 'อังคาร', 'พุธ', 'พฤหัสบดี', 'ศุกร์', 'เสาร์'];
+function thDateLong(s) {
+  const d = parseYmd(s);
+  return TH_DAYS_LONG[d.getDay()] + ' ' + d.getDate() + ' ' + TH_MONTHS_LONG[d.getMonth()] + ' ' + (d.getFullYear() + 543);
+}
+function greeting() {
+  const h = new Date().getHours();
+  return h < 12 ? 'สวัสดีตอนเช้า' : h < 16 ? 'สวัสดีตอนบ่าย' : 'สวัสดีตอนเย็น';
+}
+function nowHm() {
+  const d = new Date();
+  return String(d.getHours()).padStart(2, '0') + ':' + String(d.getMinutes()).padStart(2, '0');
+}
 
 function parseYmd(s) { const [y, m, d] = String(s).split('-').map(Number); return new Date(y, m - 1, d); }
 function ymd(d) { return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0'); }
