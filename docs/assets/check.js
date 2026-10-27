@@ -102,6 +102,8 @@
     const ss = S.data.sessions;
     if (!ss.length) { S.sessionId = null; S.date = null; return; }
     const pick = ss.find((s) => s.state === 'open')
+      || ss.find((s) => s.state === 'unlocked' && !S.data.attendance[s.id])
+      || ss.find((s) => s.state === 'unlocked')
       || ss.find((s) => s.date === S.data.today && s.state === 'upcoming')
       || ss.filter((s) => s.date <= S.data.today).pop()
       || ss[0];
@@ -144,10 +146,12 @@
     upcoming: (s) => `${icon('clock', 'sm')} เปิด ${s.date === S.data.today ? s.open_time + ' น.' : thDate(s.date)}`,
     closed: () => `${icon('lock', 'sm')} ปิดแล้ว`,
     late: () => `${icon('edit', 'sm')} เลยเวลา · แก้ไขได้`,
+    unlocked: (s) => `${icon('unlock', 'sm')} เปิดย้อนหลังถึง ${untilText(s.unlock_until)}`,
   };
 
   function current() { return S.data.sessions.find((s) => s.id === S.sessionId); }
-  function canEdit(s) { return S.data.isAdmin || ((s.state === 'open' || s.state === 'late') && S.data.activity.status !== 'closed'); }
+  function canEdit(s) { return S.data.isAdmin || (['open', 'late', 'unlocked'].includes(s.state) && S.data.activity.status !== 'closed'); }
+  function untilText(u) { return (u.slice(0, 10) === S.data.today ? '' : thDate(u.slice(0, 10)) + ' ') + u.slice(11, 16) + ' น.'; }
   function marksOf(sid) { return (S.marks[sid] = S.marks[sid] || {}); }
 
   function render() {
@@ -179,7 +183,8 @@
         ${daySessions.length > 1 ? `<div class="seg" id="slots">${daySessions.map((s) => `<button data-sid="${s.id}" class="${s.id === S.sessionId ? 'on' : ''}">${esc(s.label)}<small>${s.open_time}–${s.close_time}${d.attendance[s.id] ? ' ✓' : ''}</small></button>`).join('')}</div>` : ''}
         ${d.activity.status === 'closed' && !d.isAdmin ? '<div class="notice bad">' + icon('lock', 'sm') + '<span>กิจกรรมนี้ปิดการเช็คชื่อแล้ว</span></div>' : ''}
         ${sess && sess.state === 'upcoming' && !d.isAdmin ? `<div class="notice warn">${icon('clock', 'sm')}<span>ยังไม่ถึงเวลาเช็คชื่อรอบนี้ เปิดให้เช็ค ${thDate(sess.date)} เวลา ${sess.open_time}–${sess.close_time} น.</span></div>` : ''}
-        ${sess && sess.state === 'closed' && !d.isAdmin ? `<div class="notice bad">${icon('lock', 'sm')}<span>หมดเวลาเช็คชื่อรอบนี้แล้ว หากต้องการแก้ไขให้ติดต่อแอดมิน</span></div>` : ''}
+        ${sess && sess.state === 'unlocked' && d.activity.status !== 'closed' ? `<div class="notice">${icon('unlock', 'sm')}<span>แอดมินเปิดให้ห้องนี้เช็คชื่อรอบนี้ย้อนหลังได้ถึง ${untilText(sess.unlock_until)}</span></div>` : ''}
+        ${sess && sess.state === 'closed' && !d.isAdmin ?`<div class="notice bad">${icon('lock', 'sm')}<span>หมดเวลาเช็คชื่อรอบนี้แล้ว หากต้องการแก้ไขให้ติดต่อแอดมิน</span></div>` : ''}
         <div class="t-sum">
           ${statuses.map((k) => `<div class="${k}"><span>${esc(d.statusDefs[k].label)}</span><b>${tally[k] || 0}</b></div>`).join('')}
           <div class="none"><span>ยังไม่เช็ค</span><b>${unset}</b></div>

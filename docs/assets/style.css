@@ -225,6 +225,7 @@ table.t tr.bad td { background: #FFF7F7; }
 .state-pill.upcoming { background: #3B3510; color: #FCD34D; }
 .state-pill.closed { background: #4C1D1D; color: #FCA5A5; }
 .state-pill.late { background: #3B2A6B; color: #C4B5FD; }
+.state-pill.unlocked { background: #1E3A8A; color: #BFDBFE; }
 .t-body { padding: 14px 16px 16px; display: flex; flex-direction: column; gap: 12px; flex: 1; }
 .t-sum { display: grid; grid-template-columns: repeat(auto-fit, minmax(60px, 1fr)); gap: 8px; }
 .t-sum div { border-radius: 10px; padding: 6px 4px; text-align: center; }

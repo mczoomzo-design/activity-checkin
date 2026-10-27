@@ -423,6 +423,58 @@ async function pageLinks(main, id, alive) {
   }
   if (!(await fetchData())) return;
 
+  /** รอบนี้ปิดสำหรับครูแล้ว (หมดเวลา และกิจกรรมไม่ได้เปิดให้แก้ย้อนหลังทุกห้อง) */
+  function closedNow(s) {
+    const past = s.date < D.today || (s.date === D.today && D.now > s.close_time);
+    return past && !D.activity.allow_late_edit && D.activity.status !== 'closed';
+  }
+  /** การเปิดย้อนหลังที่ยังใช้ได้ของห้องสำหรับรอบนี้ (เลือกอันที่นานที่สุด) */
+  function unlockFor(roomId, sessId) {
+    return (D.unlocks || []).filter((u) => u.classroom_id === roomId && (u.session_id === sessId || u.session_id === 'ALL'))
+      .sort((a, b) => b.until.localeCompare(a.until))[0];
+  }
+  function untilText(u) { return (u.slice(0, 10) === D.today ? 'วันนี้ ' : thDate(u.slice(0, 10)) + ' ') + u.slice(11, 16) + ' น.'; }
+
+  function unlockModal(r) {
+    const sess = ss.find((s) => s.id === selSid);
+    const pending = ss.filter((s, i) => closedNow(s) && !r.progress[i]).length;
+    const plusHour = new Date(Date.now() + 3600000);
+    const hh = String(plusHour.getHours()).padStart(2, '0') + ':' + String(plusHour.getMinutes()).padStart(2, '0');
+    const m = openModal(`
+      <div class="modal-head"><div class="badge-ic">${icon('unlock')}</div><div class="grow"><h2>เปิดให้ห้อง ${esc(r.name)} เช็คย้อนหลัง</h2><p class="sub small">${esc(D.activity.name)}${r.advisor ? ' · ' + esc(r.advisor) : ''}</p></div><button class="icon-btn" data-close>${icon('x')}</button></div>
+      <div id="uForm" class="stack">
+        <div class="col"><span class="label">เปิดรอบไหน</span>
+          <label class="check"><input type="radio" name="uScope" value="one" checked> เฉพาะรอบนี้: ${esc(sess.label)} ${thDate(sess.date, false, true)} (${sess.open_time}–${sess.close_time})</label>
+          <label class="check"><input type="radio" name="uScope" value="ALL"> ทุกรอบที่หมดเวลาแล้วของห้องนี้ <span class="muted small">(ค้างเช็ค ${pending} รอบ)</span></label>
+        </div>
+        <div class="col"><span class="label">เปิดให้ถึงเมื่อไหร่</span>
+          <label class="check"><input type="radio" name="uDur" value="hour" checked> 1 ชั่วโมง <span class="muted small">(ถึงประมาณ ${hh} น.)</span></label>
+          <label class="check"><input type="radio" name="uDur" value="today"> ถึงสิ้นวันนี้ <span class="muted small">(23:59 น.)</span></label>
+          <label class="check"><input type="radio" name="uDur" value="date"> ถึงวันที่ <input class="input" type="date" id="uDate" min="${D.today}" value="${D.today}" style="width:auto;min-height:32px;padding:4px 8px"></label>
+        </div>
+        <p class="help">ครูใช้ลิงก์เดิมได้เลย ทั้งลิงก์รวมและลิงก์ของห้อง เมื่อถึงเวลาที่กำหนด ระบบจะปิดให้เอง</p>
+      </div>
+      <div class="modal-foot" id="uFoot"><button class="btn" data-close>ยกเลิก</button><button class="btn primary" id="uGo">${icon('unlock', 'sm')} เปิดให้เช็ค</button></div>`);
+    m.el.querySelector('#uDate').addEventListener('change', () => { m.el.querySelector('input[name="uDur"][value="date"]').checked = true; });
+    m.el.querySelector('#uGo').focus();
+    m.el.querySelector('#uGo').onclick = async () => {
+      const scope = m.el.querySelector('input[name="uScope"]:checked').value;
+      const duration = m.el.querySelector('input[name="uDur"]:checked').value;
+      const btn = m.el.querySelector('#uGo'); btn.disabled = true;
+      try {
+        const res = await API.call('unlock.create', { activityId: D.activity.id, classroomId: r.id, sessionId: scope === 'ALL' ? 'ALL' : sess.id, duration, date: m.el.querySelector('#uDate').value });
+        await fetchData(true); draw();
+        const what = scope === 'ALL' ? 'ทุกรอบที่ค้างอยู่' : `รอบ${sess.label} ${thDate(sess.date)}`;
+        const msg = `ห้อง ${r.name}: เปิดให้เช็คชื่อ "${D.activity.name}" ${what} ย้อนหลังได้ถึง ${untilText(res.until)}\n${hubUrl(D.hub)}`;
+        m.el.querySelector('#uForm').innerHTML = `<div class="notice">${icon('check', 'sm')}<span>เปิดให้ห้อง ${esc(r.name)} เช็ค${esc(what)}ย้อนหลังได้ถึง <b>${esc(untilText(res.until))}</b> แล้ว</span></div>
+          <p class="sub small">ส่งข้อความนี้แจ้งครูได้เลย:</p><textarea class="input" readonly rows="3">${esc(msg)}</textarea>`;
+        m.el.querySelector('#uFoot').innerHTML = '<button class="btn" id="uCopy">' + icon('copy', 'sm') + ' คัดลอกข้อความ</button><button class="btn primary" id="uDone">เสร็จ</button>';
+        m.el.querySelector('#uCopy').onclick = () => copyText(msg);
+        m.el.querySelector('#uDone').onclick = m.close;
+      } catch (e) { apiErr(e); btn.disabled = false; }
+    };
+  }
+
   function draw() {
     const act = D.activity;
     const dates = [...new Set(ss.map((s) => s.date))];
@@ -466,13 +518,20 @@ async function pageLinks(main, id, alive) {
           <tbody>${D.rooms.map((r) => {
             const p = r.progress[idx];
             const t = p ? p.tally : {};
+            const un = unlockFor(r.id, sess.id);
+            const canUnlock = closedNow(sess) && !un && r.student_count;
             return `<tr data-room="${r.id}">
               <td><b>${esc(r.name)}</b></td>
               <td class="sub">${esc(r.advisor) || '<span class="muted">—</span>'}</td>
               <td class="sub">${r.student_count}</td>
-              <td>${p ? `<span class="pill ok">${icon('check', 'sm')} เช็คแล้ว</span> <span class="small sub nowrap">มา ${(t.P || 0) + (t.T || 0)} · ขาด ${t.A || 0}${t.L ? ' · ลา ' + t.L : ''}${t.S ? ' · ป่วย ' + t.S : ''}</span> <span class="small muted nowrap">${esc(p.at.slice(11, 16))} น.</span>` : r.student_count ? '<span class="pill warn">รอเช็ค</span>' : '<span class="pill">ไม่มีรายชื่อ</span>'}</td>
+              <td>${p ? `<span class="pill ok">${icon('check', 'sm')} เช็คแล้ว</span> <span class="small sub nowrap">มา ${(t.P || 0) + (t.T || 0)} · ขาด ${t.A || 0}${t.L ? ' · ลา ' + t.L : ''}${t.S ? ' · ป่วย ' + t.S : ''}</span> <span class="small muted nowrap">${esc(p.at.slice(11, 16))} น.</span>`
+                : !r.student_count ? '<span class="pill">ไม่มีรายชื่อ</span>'
+                : closedNow(sess) || un ? '<span class="pill bad">ไม่ได้เช็ค</span>' : '<span class="pill warn">รอเช็ค</span>'}
+                ${un ? `<div class="row small" style="gap:6px;margin-top:4px"><span class="pill pri">${icon('unlock', 'sm')} เปิดย้อนหลังถึง ${esc(untilText(un.until))}</span><button class="link-btn small" data-act="revoke" data-uid="${un.id}" style="color:var(--bad)">ยกเลิก</button></div>` : ''}
+                ${canUnlock && !p ? `<button class="btn sm soft" data-act="unlock" style="margin-left:6px">${icon('unlock', 'sm')} เปิดให้เช็คย้อนหลัง</button>` : ''}</td>
               ${act.require_pin ? `<td><code>${esc(r.pin)}</code></td>` : ''}
               <td class="actions">
+                ${canUnlock && p ? `<button class="icon-btn" data-act="unlock" title="เปิดให้ครูแก้ไขย้อนหลัง">${icon('unlock', 'sm')}</button>` : ''}
                 <button class="icon-btn" data-act="copy" title="คัดลอกลิงก์">${icon('copy', 'sm')}</button>
                 <button class="icon-btn" data-act="qr" title="QR Code">${icon('qr', 'sm')}</button>
                 <a class="icon-btn" href="${checkUrl(r.token)}" target="_blank" rel="noopener" title="เปิดหน้าเช็คชื่อ (แอดมินแก้ไขได้ทุกรอบ)">${icon('external', 'sm')}</a>
@@ -531,6 +590,16 @@ async function pageLinks(main, id, alive) {
       const r = D.rooms.find((x) => x.id === b.closest('tr').dataset.room);
       const act = b.dataset.act;
       if (act === 'copy') copyText(linkText(r));
+      if (act === 'unlock') unlockModal(r);
+      if (act === 'revoke') {
+        const u = (D.unlocks || []).find((x) => x.id === b.dataset.uid);
+        const what = u && u.session_id === 'ALL' ? 'ทุกรอบที่เปิดไว้' : 'รอบนี้';
+        if (!(await confirmBox('ยกเลิกการเปิดย้อนหลัง?', `ห้อง <b>${esc(r.name)}</b> จะเช็คชื่อ${what}ไม่ได้อีก (ข้อมูลที่เช็คไปแล้วไม่หาย)`, { okText: 'ยกเลิกการเปิด', danger: true }))) return;
+        try {
+          await API.call('unlock.revoke', { id: b.dataset.uid });
+          await fetchData(true); draw(); toast('ยกเลิกแล้ว', 'ok');
+        } catch (e) { apiErr(e); }
+      }
       if (act === 'qr') showQr({ title: 'QR Code ห้อง ' + r.name, sub: D.activity.name + (r.advisor ? ' · ' + r.advisor : ''), url: checkUrl(r.token), pin: D.activity.require_pin ? r.pin : '', copy: linkText(r), file: 'QR_' + r.name.replace(/\//g, '-') });
       if (act === 'reset') {
         if (!(await confirmBox('สร้างลิงก์ใหม่?', `ลิงก์เดิมของห้อง <b>${esc(r.name)}</b> จะใช้ไม่ได้ทันที ต้องส่งลิงก์ใหม่ให้ครูอีกครั้ง (ข้อมูลการเช็คชื่อไม่หาย)`, { okText: 'สร้างลิงก์ใหม่', danger: true }))) return;

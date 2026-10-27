@@ -14,6 +14,8 @@ const SCHEMA = {
   Sessions: ['id', 'activity_id', 'date', 'label', 'open_time', 'close_time', 'seq'],
   Links: ['token', 'activity_id', 'classroom_id', 'pin', 'created_at'],
   Attendance: ['session_id', 'classroom_id', 'data_json', 'updated_at', 'updated_by'],
+  // แอดมินเปิดให้ห้องหนึ่งเช็คย้อนหลังได้ถึงเวลา until (session_id = id ของรอบ หรือ 'ALL' = ทุกรอบที่หมดเวลา)
+  Unlocks: ['id', 'activity_id', 'classroom_id', 'session_id', 'until', 'created_at', 'revoked'],
 };
 
 const STATUS_DEFS = {
@@ -74,11 +76,13 @@ const ADMIN_ACTIONS = {
   'activity.links': activityLinks_,
   'activity.report': activityReport_,
   'link.reset': linkReset_,
+  'unlock.create': unlockCreate_,
+  'unlock.revoke': unlockRevoke_,
 };
 
 const WRITE_ACTIONS = ['teacher.save', 'admin.changePassword', 'settings.save', 'classroom.save', 'classroom.delete',
   'student.saveMany', 'student.importAll', 'student.update', 'student.delete', 'activity.save', 'activity.delete',
-  'activity.links', 'link.reset', 'hub.get'];
+  'activity.links', 'link.reset', 'hub.get', 'unlock.create', 'unlock.revoke'];
 
 function route_(action, p, auth) {
   let fn = PUBLIC_ACTIONS[action];
@@ -416,6 +420,7 @@ function classroomDelete_(p) {
   const removed = removeWhere_('Students', function (s) { return s.classroom_id === id; });
   removeWhere_('Links', function (l) { return l.classroom_id === id; });
   removeWhere_('Attendance', function (a) { return a.classroom_id === id; });
+  removeWhere_('Unlocks', function (u) { return u.classroom_id === id; });
   return { removedStudents: removed };
 }
 
@@ -696,6 +701,7 @@ function activityDelete_(p) {
   removeWhere_('Sessions', function (s) { return s.activity_id === id; });
   removeWhere_('Links', function (l) { return l.activity_id === id; });
   removeWhere_('Attendance', function (a) { return sessIds.indexOf(a.session_id) >= 0; });
+  removeWhere_('Unlocks', function (u) { return u.activity_id === id; });
   return true;
 }
 
@@ -746,6 +752,7 @@ function activityLinks_(p) {
     today: today_(),
     now: hm_(),
     hub: byRoom[HUB].token,
+    unlocks: activeUnlocks_(act.id).map(function (u) { return { id: u.id, classroom_id: u.classroom_id, session_id: u.session_id, until: u.until }; }),
     rooms: rooms.map(function (c) {
       return {
         id: c.id, name: c.name, advisor: c.advisor, advisor_contact: c.advisor_contact,
@@ -792,12 +799,61 @@ function linkContext_(p, ctx) {
   return { link: link, act: act, room: room };
 }
 
-function sessionState_(s, act, today, now) {
-  if (s.date < today) return act.allow_late_edit ? 'late' : 'closed';
-  if (s.date > today) return 'upcoming';
-  if (now < s.open_time) return 'upcoming';
-  if (now <= s.close_time) return 'open';
-  return act.allow_late_edit ? 'late' : 'closed';
+/** unlockedUntil: เวลาที่แอดมินเปิดให้เช็คย้อนหลังถึง (ถ้ามี) — รอบที่หมดเวลาจะกลายเป็น 'unlocked' */
+function sessionState_(s, act, today, now, unlockedUntil) {
+  let state;
+  if (s.date > today || (s.date === today && now < s.open_time)) state = 'upcoming';
+  else if (s.date === today && now <= s.close_time) state = 'open';
+  else state = act.allow_late_edit ? 'late' : 'closed';
+  return state === 'closed' && unlockedUntil ? 'unlocked' : state;
+}
+
+/* ============================== Late unlocks ============================== */
+
+/** การเปิดย้อนหลังที่ยังไม่หมดอายุของห้องในกิจกรรม */
+function activeUnlocks_(activityId, classroomId) {
+  const now = nowStr_();
+  return read_('Unlocks').filter(function (u) {
+    return u.activity_id === activityId && (!classroomId || u.classroom_id === classroomId) && u.revoked !== '1' && u.until > now;
+  });
+}
+
+/** เวลาที่รอบนี้ถูกเปิดย้อนหลังถึง (เลือกอันที่นานที่สุด) หรือ '' */
+function unlockUntil_(unlocks, classroomId, sessionId) {
+  return unlocks.reduce(function (m, u) {
+    return u.classroom_id === classroomId && (u.session_id === sessionId || u.session_id === 'ALL') && u.until > m ? u.until : m;
+  }, '');
+}
+
+function unlockCreate_(p) {
+  const act = activityGet_({ id: str_(p.activityId) });
+  const room = targetRooms_(act).filter(function (c) { return c.id === p.classroomId; })[0];
+  if (!room) throw userErr_('ไม่พบห้องนี้ในกิจกรรม');
+  const sessionId = p.sessionId === 'ALL' ? 'ALL' : str_(p.sessionId);
+  if (sessionId !== 'ALL' && !act.sessions.some(function (s) { return s.id === sessionId; })) throw userErr_('ไม่พบรอบเช็คชื่อนี้');
+  let until;
+  if (p.duration === 'hour') {
+    until = Utilities.formatDate(new Date(Date.now() + 60 * 60 * 1000), TZ, 'yyyy-MM-dd HH:mm:ss');
+  } else if (p.duration === 'today') {
+    until = today_() + ' 23:59:59';
+  } else if (p.duration === 'date') {
+    const d = str_(p.date);
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(d) || d < today_()) throw userErr_('กรุณาเลือกวันที่ตั้งแต่วันนี้เป็นต้นไป');
+    until = d + ' 23:59:59';
+  } else {
+    throw userErr_('กรุณาเลือกระยะเวลาที่เปิดให้เช็ค');
+  }
+  const row = { id: newId_('u'), activity_id: act.id, classroom_id: room.id, session_id: sessionId, until: until, created_at: nowStr_(), revoked: '' };
+  insert_('Unlocks', [row]);
+  return { id: row.id, until: until };
+}
+
+function unlockRevoke_(p) {
+  const row = read_('Unlocks').filter(function (u) { return u.id === p.id; })[0];
+  if (!row) throw userErr_('ไม่พบรายการนี้');
+  row.revoked = '1';
+  update_('Unlocks', row);
+  return true;
 }
 
 /** รอบที่ควรแสดงตอนนี้: รอบที่เปิดอยู่ > รอบถัดไปของวันนี้ > รอบล่าสุดที่ผ่านมา > รอบแรก */
@@ -838,8 +894,11 @@ function hubGet_(p) {
 function teacherGet_(p, ctx) {
   const c = linkContext_(p, ctx);
   const today = today_(), now = hm_();
+  const unlocks = activeUnlocks_(c.act.id, c.room.id);
   const sessions = sessionsOf_(c.act.id).map(function (s) {
-    s.state = sessionState_(s, c.act, today, now);
+    const until = unlockUntil_(unlocks, c.room.id, s.id);
+    s.state = sessionState_(s, c.act, today, now, until);
+    if (s.state === 'unlocked') s.unlock_until = until;
     return s;
   });
   const sessIds = sessions.map(function (s) { return s.id; });
@@ -870,7 +929,7 @@ function teacherSave_(p, ctx) {
   if (c.act.status === 'closed' && !ctx.isAdmin) throw userErr_('กิจกรรมนี้ปิดการเช็คชื่อแล้ว');
   const sess = sessionsOf_(c.act.id).filter(function (s) { return s.id === p.sessionId; })[0];
   if (!sess) throw userErr_('ไม่พบรอบเช็คชื่อนี้');
-  const state = sessionState_(sess, c.act, today_(), hm_());
+  const state = sessionState_(sess, c.act, today_(), hm_(), unlockUntil_(activeUnlocks_(c.act.id, c.room.id), c.room.id, sess.id));
   if (!ctx.isAdmin) {
     if (state === 'upcoming') throw userErr_('ยังไม่ถึงเวลาเช็คชื่อรอบนี้ (เปิด ' + sess.open_time + ' น.)');
     if (state === 'closed') throw userErr_('หมดเวลาเช็คชื่อรอบนี้แล้ว (ปิด ' + sess.close_time + ' น.) ติดต่อแอดมินหากต้องการแก้ไข');
